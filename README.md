@@ -18,7 +18,10 @@ conda activate submap-sfm
 # Optional
 conda install spyder -y
 
+# PyTorch, CUDA=12
+pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
 pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
+
 pip install -r requirements.txt
 pip install -e third_party/vismatch --no-build-isolation
 pip install -e . --no-build-isolation

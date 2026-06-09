@@ -9,7 +9,8 @@ from submap_sfm.pairs import (
 )
 
 CONFIG = "configs/default.yaml"
-W = 20               # sequential window (matching-method param)
+W = 20               # sequential window (intra method param)
+INTER_STRIDE = 10    # match keyframes against every Nth local frame (inter)
 
 scene = Scene.load(CONFIG)
 # ---------------------------------------------------------------------------
@@ -39,10 +40,10 @@ splits = {}
 for s in scene.submaps:
     aug = f"{s}_aug"
     groups, keyframes = [images[s]], kf(aug)
-    parts = build_scene_pairs_split(groups, keyframes, window=W)
+    parts = build_scene_pairs_split(groups, keyframes, window=W, inter_stride=INTER_STRIDE)
     splits[aug] = parts
     write_unit(aug, parts["intra"], parts["inter"])
-    print(f"{aug:14s} {summarize(groups, keyframes, W)}")
+    print(f"{aug:14s} {summarize(groups, keyframes, W, inter_stride=INTER_STRIDE)}")
 
 # --- full-scene baseline: union of the submaps (combined only) ---
 full_intra = set().union(*(set(p["intra"]) for p in splits.values()))

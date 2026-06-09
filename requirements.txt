@@ -1,2 +1,4 @@
+editables
+hatchling
 pycolmap
 pyyaml

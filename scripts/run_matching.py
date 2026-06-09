@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Match a unit's pairs with vismatch and write a verified COLMAP database.
   python scripts/run_matching.py --unit hub_left_aug
-  python scripts/run_matching.py --unit hub_left_aug --pairs pairs_inter.txt --debug --viz-every 50
+  python scripts/run_matching.py --unit hub_left_aug --pairs pairs_inter.txt --viz-every 50
   python scripts/run_matching.py --matcher roma
 """
 from __future__ import annotations
