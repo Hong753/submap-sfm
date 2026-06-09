@@ -13,7 +13,8 @@ from typing import Iterator
 import numpy as np
 from PIL import Image
 
-from vismatch import get_matcher  # vismatch (third_party/vismatch, installed editable)
+from vismatch import get_matcher  # third_party/vismatch, installed editable
+
 
 @dataclass
 class PairMatch:
@@ -32,7 +33,8 @@ def _get(result: dict, *keys):
 
 def load_matcher(name: str = "superpoint-lightglue", device: str = "cuda", img_size: int = 1024):
     """Sparse/fast (high-volume intra): 'superpoint-lightglue', 'aliked-lightglue', 'disk-lightglue'.
-       Dense/slow (hard inter, debug):  'roma', 'master'."""
+       Dense/slow (hard inter, debug):  'roma', 'master'.
+    Verify exact names before a long run; get_matcher() raises with the valid list on a bad name."""
     matcher = get_matcher(name, device=device)
     matcher.im_size = img_size
     return matcher
@@ -42,14 +44,12 @@ def image_size(path: Path) -> tuple[int, int]:
     with Image.open(path) as im:
         return im.size  # (W, H)
 
-
 def match_pairs(matcher, scene_root: Path, pairs, img_size: int = 1024,
                 min_matches: int = 15, progress: bool = True) -> Iterator[PairMatch]:
     """Yield a PairMatch per pair clearing `min_matches`.
 
-    vismatch's BaseMatcher rescales matched keypoints back to ORIGINAL resolution before
-    returning, so we don't rescale again. Verify once with --debug (overlay on full-res
-    images); if points are off by the resize ratio, rescale here.
+    Matched coords come back in the matcher's RESIZED frame (vismatch stretches to a
+    square img_size x img_size), so we rescale per-axis back to original resolution.
     """
     it = pairs
     if progress:
@@ -60,15 +60,18 @@ def match_pairs(matcher, scene_root: Path, pairs, img_size: int = 1024,
         img0 = matcher.load_image(str(scene_root / name0), resize=img_size)
         img1 = matcher.load_image(str(scene_root / name1), resize=img_size)
         result = matcher(img0, img1)
-        # Use ALL mutual matches; COLMAP's geometric verification does the F/E filtering.
-        mkpts0 = np.asarray(_get(result, "mkpts0", "matched_kpts0"), dtype=np.float32)
-        mkpts1 = np.asarray(_get(result, "mkpts1", "matched_kpts1"), dtype=np.float32)
+        mkpts0 = np.asarray(result["matched_kpts0"], dtype=np.float32)
+        mkpts1 = np.asarray(result["matched_kpts1"], dtype=np.float32)
+        (W0, H0), (W1, H1) = image_size(scene_root / name0), image_size(scene_root / name1)
+        rH0, rW0 = tuple(img0.shape)[-2:]
+        rH1, rW1 = tuple(img1.shape)[-2:]
+        mkpts0 *= np.array([W0 / rW0, H0 / rH0], dtype=np.float32)
+        mkpts1 *= np.array([W1 / rW1, H1 / rH1], dtype=np.float32)
         if mkpts0.shape[0] < min_matches:
             continue
         yield PairMatch(name0, name1, mkpts0, mkpts1)
 
-
-def visualize_pair(pm: PairMatch, scene_root: Path, out_path: Path, max_draw: int = 200):
+def visualize_pair(pm: PairMatch, scene_root: Path, out_path: Path, max_draw: int = 10_000):
     """Debug: draw matches on the ORIGINAL-resolution images. If points land on
     corresponding content, coordinate handling is correct."""
     import matplotlib

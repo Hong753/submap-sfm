@@ -2,6 +2,11 @@
 
 merge per-image keypoints (quantized) -> indexed matches -> write db ->
 geometric verification (pycolmap.verify_matches) to populate two_view_geometries.
+
+Validated against pycolmap 4.0.4:
+  - Database is an abstract interface; get the concrete backend via Database.open(path)
+  - write_keypoints takes a raw [m, 4] float32 array (x, y, scale, orientation)
+  - write_matches takes a raw [m, 2] uint32 array (no FeatureMatches conversion)
 """
 from __future__ import annotations
 
@@ -14,7 +19,6 @@ import pycolmap
 from submap_sfm.matching import PairMatch, image_size
 
 PIXEL_ORIGIN_SHIFT = 0.5  # COLMAP: center of upper-left pixel is (0.5, 0.5)
-
 
 class KeypointTable:
     """Accumulate matched points per image, quantizing to a grid so the same physical
@@ -39,8 +43,13 @@ class KeypointTable:
         return out
 
     def keypoints(self, name: str) -> np.ndarray:
+        """Return [m, 4] float32: x, y, scale, orientation (only x,y used downstream)."""
         arr = np.asarray(self._coords.get(name, []), dtype=np.float32).reshape(-1, 2)
-        return arr + PIXEL_ORIGIN_SHIFT
+        arr = arr + PIXEL_ORIGIN_SHIFT
+        out = np.zeros((len(arr), 4), dtype=np.float32)
+        out[:, :2] = arr
+        out[:, 2] = 1.0  # scale; orientation left 0
+        return out
 
 
 def build_database(db_path: Path, scene_root: Path, matches: list[PairMatch], *,
@@ -51,8 +60,7 @@ def build_database(db_path: Path, scene_root: Path, matches: list[PairMatch], *,
     db_path = Path(db_path)
     if db_path.exists():
         db_path.unlink()
-    db = pycolmap.Database()
-    db.open(str(db_path))
+    db = pycolmap.Database.open(str(db_path))
 
     table = KeypointTable(cell=merge_cell)
     indexed: list[tuple[str, str, np.ndarray]] = []
@@ -79,12 +87,12 @@ def build_database(db_path: Path, scene_root: Path, matches: list[PairMatch], *,
         image_ids[name] = db.write_image(pycolmap.Image(name=name, camera_id=cam_id))
 
     for name, image_id in image_ids.items():
-        db.write_keypoints(image_id, pycolmap.keypoints_from_matrix(table.keypoints(name)))
+        db.write_keypoints(image_id, table.keypoints(name))  # raw [m,4] float32
 
     for name0, name1, m in indexed:
         id0, id1 = image_ids[name0], image_ids[name1]
         assert id0 < id1, (name0, name1)
-        db.write_matches(id0, id1, pycolmap.matches_from_matrix(m))
+        db.write_matches(id0, id1, m)  # raw [m,2] uint32
 
     db.close()
     return image_ids
@@ -92,8 +100,27 @@ def build_database(db_path: Path, scene_root: Path, matches: list[PairMatch], *,
 
 def verify(db_path: Path, pairs_path: Path, max_num_trials: int = 20000,
            min_inlier_ratio: float = 0.1):
+    """Populate two_view_geometries. Required — COLMAP reconstructs from this table only."""
     pycolmap.verify_matches(
         str(db_path), str(pairs_path),
         options=dict(ransac=dict(max_num_trials=max_num_trials,
                                  min_inlier_ratio=min_inlier_ratio)),
     )
+
+def prune_by_inliers(db_path: Path, min_inliers: int) -> int:
+    """Delete verified two-view geometries with fewer than min_inliers inlier matches.
+    The mapper reads only two_view_geometries, so this removes weak pairs (e.g. keyframe
+    bridges that 'verified' on repetitive/reflective structure) from reconstruction.
+    Returns the number of pairs kept.
+    """
+    db = pycolmap.Database.open(str(db_path))
+    pair_ids, num_inliers = db.read_two_view_geometry_num_inliers()
+    kept = 0
+    for pid, n in zip(pair_ids, num_inliers):
+        if n >= min_inliers:
+            kept += 1
+            continue
+        id1, id2 = pycolmap.pair_id_to_image_pair(pid)
+        db.delete_two_view_geometry(id1, id2)
+    db.close()
+    return kept
