@@ -1,4 +1,4 @@
-scene_root: /data/colmap_scenes/lg_science_park/hub_galaxy_test1
+scene_root: /workspace/colmap_scenes/lg_science_park/hub_galaxy_test1
 
 submaps: [hub_left, hub_right]
 
