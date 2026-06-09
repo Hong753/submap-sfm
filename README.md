@@ -34,3 +34,15 @@ submap-sfm/
 ├── README.md
 └── .gitignore
 ```
+
+```
+{SCENE_ROOT}/
+├── hub_left/images/00000.jpg ...
+├── hub_right/images/00000.jpg ...
+├── keyframes/
+│   ├── hub_left_aug.txt     # prefixed names sourced from hub_right (+ any other neighbor)
+│   └── hub_right_aug.txt    # prefixed names sourced from hub_left  (+ any other neighbor)
+├── hub_left_aug/pairs.txt
+├── hub_right_aug/pairs.txt
+└── full_scene/pairs.txt
+```

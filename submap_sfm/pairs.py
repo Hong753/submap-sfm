@@ -4,18 +4,21 @@ Two matching relationships, per the project design:
 
 * Sequential (intra-trajectory): each image is matched to its `window`
   temporal neighbours. Captures the real overlap inside a continuous capture.
-* Keyframe (exhaustive bridge): a small, manually selected set matched against
-  every other image in the scene. These anchors connect non-sequential parts
-  (left<->right) and are what the merge step uses to estimate the Sim(3).
+* Keyframe (bridge): a small, manually selected set matched against the local
+  trajectory images only (never against each other). These anchors connect
+  non-sequential parts (left<->right) and are what the merge step uses to
+  estimate the Sim(3).
 
-Same builder for both settings:
-  augmented submap -> one sequential group + keyframes
-      hub_left_aug = [1941 sequential] + [20 keyframes]
-  full scene       -> several sequential groups + keyframes
-      [1941 left] + [2755 right] + [20 keyframes]
+Per augmented submap, build the pairs with one sequential group + keyframes:
+    hub_left_aug = [1941 sequential] + [20 keyframes drawn from hub_right]
 
-Pairs are unordered and de-duplicated, so any overlap between the sequential
-and keyframe sets is removed automatically and the counts come out exact.
+For the full-scene baseline, take the de-duplicated union of the submap pair
+sets (`set(left_aug) | set(right_aug)`); that performs exactly the same matches
+as the merge, in a single reconstruction.
+
+Pairs are unordered (canonicalised) and stored in a set, so reverse-ordered
+duplicates and any sequential/keyframe overlap are removed automatically and
+the counts come out exact.
 """
 
 from __future__ import annotations
@@ -27,20 +30,42 @@ Pair = tuple[str, str]
 
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff")
 
-def list_images(image_dir: str | Path, exts: Iterable[str] = IMAGE_EXTS) -> list[str]:
-    """Image file names in a directory, lexicographically sorted.
 
-    NOTE: sequential pairing assumes this order matches capture order, so
-    frames must be zero-padded (frame_00001.jpg, ...). If they aren't, sort
-    them yourself and pass explicit lists instead.
+def list_images(
+    image_dir: str | Path,
+    root: str | Path | None = None,
+    exts: Iterable[str] = IMAGE_EXTS,
+) -> list[str]:
+    """Image file names, lexicographically sorted.
+
+    If `root` is given, each name is the file's path relative to `root` (POSIX),
+    e.g. 'hub_left/images/00000.jpg'. This keeps names unique across submaps and
+    lets you use `root` directly as COLMAP's image_path. NOTE: sequential pairing
+    assumes lexicographic order matches capture order (zero-padded names).
     """
     image_dir = Path(image_dir)
     exts = tuple(e.lower() for e in exts)
-    return sorted(p.name for p in image_dir.iterdir() if p.suffix.lower() in exts)
+    files = sorted(p for p in image_dir.iterdir() if p.suffix.lower() in exts)
+    if root is None:
+        return [p.name for p in files]
+    root = Path(root)
+    return [p.relative_to(root).as_posix() for p in files]
 
 
 def _canonical(a: str, b: str) -> Pair:
     return (a, b) if a <= b else (b, a)
+
+
+def _unique(groups: Iterable[list[str]]) -> list[str]:
+    """Flatten lists of names into a de-duplicated, order-preserving list."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for g in groups:
+        for n in g:
+            if n not in seen:
+                seen.add(n)
+                out.append(n)
+    return out
 
 
 def sequential_pairs(images: list[str], window: int) -> set[Pair]:
@@ -63,44 +88,30 @@ def exhaustive_pairs(query: list[str], targets: list[str]) -> set[Pair]:
     return pairs
 
 
-def _scene_images(sequential_groups: list[list[str]], keyframes: list[str]) -> list[str]:
-    seen: set[str] = set()
-    scene: list[str] = []
-    for group in sequential_groups:
-        for name in group:
-            if name not in seen:
-                seen.add(name)
-                scene.append(name)
-    for kf in keyframes:
-        if kf not in seen:
-            seen.add(kf)
-            scene.append(kf)
-    return scene
-
-
 def build_scene_pairs(
     sequential_groups: list[list[str]],
     keyframes: list[str] | None = None,
     window: int = 20,
 ) -> list[Pair]:
-    """Build the full pair list for a scene.
+    """Build the pair list for a scene.
 
     sequential_groups: one list of image names per trajectory; sequential
         matching with `window` is applied inside each.
-    keyframes: names matched exhaustively against every image in the scene
-        (and each other). May overlap with the groups (full-scene case) or be
-        extra images (augmented submap) -- duplicates are handled either way.
+    keyframes: names matched exhaustively against the local trajectory images
+        only (the members of sequential_groups), and never against each other.
 
     Returns a sorted list of unique, unordered (name0, name1) pairs.
     """
     keyframes = keyframes or []
-    scene = _scene_images(sequential_groups, keyframes)
+    kf_set = set(keyframes)
+    local = _unique(sequential_groups)
+    targets = [x for x in local if x not in kf_set]  # local trajectory, no keyframes
 
     pairs: set[Pair] = set()
     for group in sequential_groups:
         pairs |= sequential_pairs(group, window)
     if keyframes:
-        pairs |= exhaustive_pairs(keyframes, scene)
+        pairs |= exhaustive_pairs(keyframes, targets)
     return sorted(pairs)
 
 
@@ -111,11 +122,15 @@ def summarize(
 ) -> dict:
     """Pair-count breakdown for the report (sequential / keyframe / total)."""
     keyframes = keyframes or []
-    scene = _scene_images(sequential_groups, keyframes)
+    kf_set = set(keyframes)
+    local = _unique(sequential_groups)
+    targets = [x for x in local if x not in kf_set]
+    scene = _unique([local, keyframes])
+
     seq: set[Pair] = set()
     for group in sequential_groups:
         seq |= sequential_pairs(group, window)
-    kf = exhaustive_pairs(keyframes, scene) if keyframes else set()
+    kf = exhaustive_pairs(keyframes, targets) if keyframes else set()
     total = seq | kf
     return {
         "images": len(scene),
