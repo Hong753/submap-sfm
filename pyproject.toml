@@ -1,0 +1,18 @@
+[project]
+name = "submap-sfm"
+version = "0.1.0"
+description = "Large-scale SfM via submap reconstruction and pose merging"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "tqdm",
+]
+# pycolmap is installed separately; vismatch is vendored in third_party/ and
+# installed editable. Add further deps here as modules require them.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["submap_sfm"]
