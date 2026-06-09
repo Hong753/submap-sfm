@@ -5,3 +5,12 @@ submaps: [hub_left, hub_right]
 # overlapping submap pairs (undirected); these get bridged + merged
 overlaps:
   - [hub_left, hub_right]
+
+matching:
+  matcher: aliked-lg      # sparse default; roma/master for hard inter pairs
+  img_size: 1024
+  device: cuda
+  min_matches: 15
+  merge_cell: 1.0
+  camera_model: SIMPLE_RADIAL
+  focal_factor: 1.2

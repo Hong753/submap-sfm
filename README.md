@@ -10,6 +10,7 @@ merging their poses (Sim(3) + global bundle adjustment). COLMAP backend,
 # SSH
 git clone git@github.com:Hong753/submap-sfm.git
 cd submap-sfm
+git submodule update --init --recursive
 
 conda create -n submap-sfm python=3.12 -y
 conda activate submap-sfm
@@ -18,8 +19,9 @@ conda activate submap-sfm
 conda install spyder -y
 
 pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
-pip install pyyaml
-pip install -e .
+pip install pycolmap pyyaml
+pip install -e third_party/vismatch --no-build-isolation
+pip install -e . --no-build-isolation
 ```
 
 (The vismatch submodule and remaining dependencies are added later; once the
