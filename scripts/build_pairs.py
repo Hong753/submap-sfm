@@ -44,9 +44,9 @@ for s in scene.submaps:
     write_unit(aug, parts["intra"], parts["inter"])
     print(f"{aug:14s} {summarize(groups, keyframes, W)}")
 
-# --- full-scene baseline: per-category union of the submaps ---
-full_intra = sorted(set().union(*(set(p["intra"]) for p in splits.values())))
-full_inter = sorted(set().union(*(set(p["inter"]) for p in splits.values())))
-write_unit("full_scene", full_intra, full_inter)
+# --- full-scene baseline: union of the submaps (combined only) ---
+full_intra = set().union(*(set(p["intra"]) for p in splits.values()))
+full_inter = set().union(*(set(p["inter"]) for p in splits.values()))
+emit("full_scene", "pairs.txt", sorted(full_intra | full_inter))
 print(f"{'full_scene':14s} intra={len(full_intra)} inter={len(full_inter)} "
-      f"total={len(set(full_intra) | set(full_inter))}")
+      f"total={len(full_intra | full_inter)}")

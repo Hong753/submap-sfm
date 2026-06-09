@@ -75,8 +75,6 @@ overlaps:
 ├── hub_right_aug/
 │   └── ...                            # same files
 └── full_scene/
-    ├── pairs_intra.txt
-    ├── pairs_inter.txt
     └── pairs.txt
 ```
 
