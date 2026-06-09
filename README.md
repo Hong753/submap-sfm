@@ -1,8 +1,10 @@
 # submap-sfm
+Large-scale Structure-from-Motion by reconstructing submaps independently and
+merging their poses (Sim(3) + global BA). COLMAP backend, vismatch for matching.
 
 ```
 # SSH
-git clone git@github.com:Hong753/submap-sfm.git
+git clone git@github.com:Hong753/submap-sfm.git --recursive
 cd submap-sfm
 
 conda create -n submap-sfm python=3.12 -y
@@ -12,6 +14,9 @@ conda activate submap-sfm
 conda install spyder -y
 
 pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
+
+
+pip install -e . --no-build-isolation
 ```
 
 ```

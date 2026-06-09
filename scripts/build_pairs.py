@@ -1,5 +1,4 @@
 import os
-
 from submap_sfm.pairs import (
     list_images,
     build_scene_pairs,
@@ -14,31 +13,32 @@ SUBMAPS = [
     "hub_right",
 ]
 W = 20
+# ---------------------------------------------------------------------------
 
-#----------------------------------------------------------------------------
-
+# image names relative to SCENE_ROOT, e.g. "hub_left/images/00000.jpg"
 images = {
     s: list_images(os.path.join(SCENE_ROOT, s, "images"), root=SCENE_ROOT)
     for s in SUBMAPS
 }
 
+
 def kf(aug):
     return read_list(os.path.join(SCENE_ROOT, "keyframes", f"{aug}.txt"))
 
-# reconstruction units: name -> (sequential groups, keyframes)
-units = {
-    "hub_left_aug":  ([images["hub_left"]],  kf("hub_left_aug")),
-    "hub_right_aug": ([images["hub_right"]], kf("hub_right_aug")),
-}
-
-# full scene: all trajectories + every bridge keyframe (deduped union)
-all_kf = sorted(set(kf("hub_left_aug")) | set(kf("hub_right_aug")))
-units["full_scene"] = ([images["hub_left"], images["hub_right"]], all_kf)
-
-#----------------------------------------------------------------------------
-
-for name, (groups, keyframes) in units.items():
+# --- augmented submaps: local trajectory + keyframes from the neighbour ---
+submap_pairs = {}
+for s in SUBMAPS:
+    aug = f"{s}_aug"
+    groups, keyframes = [images[s]], kf(aug)
     pairs = build_scene_pairs(groups, keyframes, window=W)
-    out = os.path.join(SCENE_ROOT, name, "pairs.txt")
-    write_pairs(pairs, out)
-    print(f"{name:14s} {summarize(groups, keyframes, W)}")
+    submap_pairs[aug] = pairs
+    write_pairs(pairs, os.path.join(SCENE_ROOT, aug, "pairs.txt"))
+    print(f"{aug:14s} {summarize(groups, keyframes, W)}")
+
+# --- full-scene baseline: union of the submap pair sets (== the merge's matches) ---
+full = sorted(set().union(*submap_pairs.values()))
+write_pairs(full, os.path.join(SCENE_ROOT, "full_scene", "pairs.txt"))
+naive = sum(len(p) for p in submap_pairs.values())
+print(f"{'full_scene':14s} total_pairs={len(full)}  ({naive - len(full)} shared pairs deduped)")
+
+# ---------------------------------------------------------------------------
