@@ -1,20 +1,21 @@
 import os
+
 from submap_sfm.scene import Scene
 from submap_sfm.pairs import (
     list_images,
-    build_scene_pairs_split,
-    summarize,
-    write_pairs,
+    node_pairs,
+    keyframe_pairs,
     read_list,
+    write_pairs,
 )
 
 CONFIG = "configs/default.yaml"
-W = 20               # sequential window (intra method param)
-INTER_STRIDE = 10    # match keyframes against every Nth local frame (inter)
+W = 10              # sequential window (node / intra)
+INTER_STRIDE = 5    # keyframe -> local stride; 1 = every local frame, raise to speed up
 
-scene = Scene.load(CONFIG)
 # ---------------------------------------------------------------------------
 
+scene = Scene.load(CONFIG)
 images = {
     s: list_images(os.path.join(scene.root, s, "images"), root=scene.root)
     for s in scene.submaps
@@ -26,28 +27,26 @@ def kf(aug):
 
 
 def emit(unit, fname, pairs):
-    write_pairs(pairs, os.path.join(scene.root, unit, fname))
+    write_pairs(sorted(pairs), os.path.join(scene.root, unit, fname))
 
 
-def write_unit(unit, intra, inter):
-    emit(unit, "pairs_intra.txt", intra)                      # within-node
-    emit(unit, "pairs_inter.txt", inter)                      # node-to-edge
-    emit(unit, "pairs.txt", sorted(set(intra) | set(inter)))  # combined, for matching
-
-
-# --- augmented submaps ---
+# --- augmented submaps: sequential (intra) + manual keyframes (inter) ---
 splits = {}
 for s in scene.submaps:
     aug = f"{s}_aug"
-    groups, keyframes = [images[s]], kf(aug)
-    parts = build_scene_pairs_split(groups, keyframes, window=W, inter_stride=INTER_STRIDE)
-    splits[aug] = parts
-    write_unit(aug, parts["intra"], parts["inter"])
-    print(f"{aug:14s} {summarize(groups, keyframes, W, inter_stride=INTER_STRIDE)}")
+    intra = node_pairs(images[s], window=W)
+    inter = keyframe_pairs(kf(aug), images[s], stride=INTER_STRIDE)
+    splits[aug] = (intra, inter)
+    emit(aug, "pairs_intra.txt", intra)
+    emit(aug, "pairs_inter.txt", inter)
+    emit(aug, "pairs.txt", intra | inter)
+    print(f"{aug:14s} intra={len(intra)} inter={len(inter)} total={len(intra | inter)}")
 
-# --- full-scene baseline: union of the submaps (combined only) ---
-full_intra = set().union(*(set(p["intra"]) for p in splits.values()))
-full_inter = set().union(*(set(p["inter"]) for p in splits.values()))
-emit("full_scene", "pairs.txt", sorted(full_intra | full_inter))
-print(f"{'full_scene':14s} intra={len(full_intra)} inter={len(full_inter)} "
-      f"total={len(full_intra | full_inter)}")
+# --- full-scene baseline: de-duplicated union of the submap pair sets ---
+full, naive = set(), 0
+for intra, inter in splits.values():
+    s = intra | inter
+    full |= s
+    naive += len(s)
+emit("full_scene", "pairs.txt", full)
+print(f"{'full_scene':14s} total={len(full)}  ({naive - len(full)} shared pairs deduped)")

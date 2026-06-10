@@ -1,25 +1,19 @@
 """Pair generation for submap-sfm.
 
-Two pair categories:
+Two pair categories per augmented submap:
 
-* intra (within-node): pairs inside a single submap's trajectory. Currently
-  produced by sequential matching with `window`, but the local method may
-  change later -- the category is the stable concept, not the algorithm.
-* inter (node-to-edge): keyframe images matched against the local trajectory
-  only (never against each other). The local map is sequential, so consecutive
-  frames are highly redundant; `inter_stride` subsamples the trajectory so each
-  keyframe matches every Nth local frame instead of all of them. These bridge
-  non-sequential parts (left<->right) and anchor the Sim(3) estimate at merge.
+* intra (node): pairs within one submap's own trajectory. Currently sequential
+  matching with `window`; "intra" is the stable concept, the algorithm may change.
+* inter (keyframe -> local): manually selected keyframes -- neighbour frames that
+  overlap this submap -- matched against the local trajectory (never against each
+  other). These bridge the submaps and anchor the Sim(3) merge.
 
-Per augmented submap, build the pairs with one sequential group + keyframes:
-    hub_left_aug = [1941 sequential] + [20 keyframes drawn from hub_right]
+Keyframes are authored by hand, one name per line, in {submap}_aug/keyframes.txt
+(see README). The full-scene baseline is the de-duplicated union of the
+augmented submaps' pair sets.
 
-For the full-scene baseline, take the de-duplicated per-category union of the
-submap pair sets; that performs exactly the same matches as the merge, in a
-single reconstruction.
-
-Pairs are unordered (canonicalised) and stored in a set, so reverse-ordered
-duplicates and any intra/inter overlap are removed automatically.
+Pairs are unordered (canonicalised) and stored in sets, so reverse-ordered
+duplicates and any intra/inter overlap collapse automatically.
 """
 
 from __future__ import annotations
@@ -40,9 +34,8 @@ def list_images(
     """Image file names, lexicographically sorted.
 
     If `root` is given, each name is the file's path relative to `root` (POSIX),
-    e.g. 'hub_left/images/00000.jpg'. This keeps names unique across submaps and
-    lets you use `root` directly as COLMAP's image_path. NOTE: sequential pairing
-    assumes lexicographic order matches capture order (zero-padded names).
+    e.g. 'hub_left/images/00000.jpg'. NOTE: sequential pairing assumes
+    lexicographic order matches capture order (zero-padded names).
     """
     image_dir = Path(image_dir)
     exts = tuple(e.lower() for e in exts)
@@ -55,18 +48,6 @@ def list_images(
 
 def _canonical(a: str, b: str) -> Pair:
     return (a, b) if a <= b else (b, a)
-
-
-def _unique(groups: Iterable[list[str]]) -> list[str]:
-    """Flatten lists of names into a de-duplicated, order-preserving list."""
-    seen: set[str] = set()
-    out: list[str] = []
-    for g in groups:
-        for n in g:
-            if n not in seen:
-                seen.add(n)
-                out.append(n)
-    return out
 
 
 def sequential_pairs(images: list[str], window: int) -> set[Pair]:
@@ -89,81 +70,27 @@ def exhaustive_pairs(query: list[str], targets: list[str]) -> set[Pair]:
     return pairs
 
 
-def _scene_pair_sets(
-    sequential_groups: list[list[str]],
-    keyframes: list[str] | None,
-    window: int,
-    inter_stride: int = 1,
-) -> tuple[set[Pair], set[Pair]]:
-    """Internal: (intra_set, inter_set) for a scene.
+def node_pairs(images: list[str], window: int = 20) -> set[Pair]:
+    """Within-node (intra) pairs for one submap. Currently sequential."""
+    return sequential_pairs(images, window)
 
-    inter_stride: subsample the local trajectory before matching it against
-        keyframes. The local map is sequential, so consecutive frames are highly
-        redundant -- each keyframe only needs to match every Nth local frame to
-        register. 1 = every frame (exhaustive); 10 = every 10th frame.
+
+def keyframe_pairs(keyframes: list[str], local: list[str], stride: int = 1) -> set[Pair]:
+    """Inter pairs: keyframes matched against the local trajectory.
+
+    Keyframes are neighbour frames overlapping this submap; `local` is this
+    submap's own trajectory. Keyframes are never paired with each other.
+    `stride` subsamples the local trajectory (1 = every frame); raise it to cut
+    matching cost at some registration-robustness cost.
     """
-    keyframes = keyframes or []
     kf_set = set(keyframes)
-    local = _unique(sequential_groups)
-    targets = [x for x in local if x not in kf_set]  # local trajectory, no keyframes
-    if inter_stride > 1:
-        targets = targets[::inter_stride]            # sample every Nth local frame
-    intra: set[Pair] = set()
-    for group in sequential_groups:
-        intra |= sequential_pairs(group, window)
-    inter = exhaustive_pairs(keyframes, targets) if keyframes else set()
-    return intra, inter
+    targets = [x for x in local if x not in kf_set]
+    if stride > 1:
+        targets = targets[::stride]
+    return exhaustive_pairs(keyframes, targets)
 
 
-def build_scene_pairs(
-    sequential_groups: list[list[str]],
-    keyframes: list[str] | None = None,
-    window: int = 20,
-    inter_stride: int = 1,
-) -> list[Pair]:
-    """Combined pair list (intra + inter), sorted and de-duplicated."""
-    intra, inter = _scene_pair_sets(sequential_groups, keyframes, window, inter_stride)
-    return sorted(intra | inter)
-
-
-def build_scene_pairs_split(
-    sequential_groups: list[list[str]],
-    keyframes: list[str] | None = None,
-    window: int = 20,
-    inter_stride: int = 1,
-) -> dict[str, list[Pair]]:
-    """Same pairs, split by category for separate inspection/visualization.
-
-    Returns {"intra": [...], "inter": [...]} where:
-      intra = within-node  (currently sequential, method may change)
-      inter = node-to-edge (keyframe -> local trajectory, strided)
-    """
-    intra, inter = _scene_pair_sets(sequential_groups, keyframes, window, inter_stride)
-    return {"intra": sorted(intra), "inter": sorted(inter)}
-
-
-def summarize(
-    sequential_groups: list[list[str]],
-    keyframes: list[str] | None = None,
-    window: int = 20,
-    inter_stride: int = 1,
-) -> dict:
-    """Pair-count breakdown for the report."""
-    keyframes = keyframes or []
-    local = _unique(sequential_groups)
-    scene = _unique([local, keyframes])
-    intra, inter = _scene_pair_sets(sequential_groups, keyframes, window, inter_stride)
-    total = intra | inter
-    return {
-        "images": len(scene),
-        "intra_pairs": len(intra),
-        "inter_pairs": len(inter),
-        "overlap_removed": len(intra) + len(inter) - len(total),
-        "total_pairs": len(total),
-    }
-
-
-def write_pairs(pairs: list[Pair], path: str | Path) -> None:
+def write_pairs(pairs: Iterable[Pair], path: str | Path) -> None:
     """Write pairs, one 'name0 name1' per line."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
