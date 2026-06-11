@@ -44,17 +44,21 @@ def image_size(path: Path) -> tuple[int, int]:
     with Image.open(path) as im:
         return im.size  # (W, H)
 
+
 def match_pairs(matcher, scene_root: Path, pairs, img_size: int = 1024,
-                min_matches: int = 15, progress: bool = True) -> Iterator[PairMatch]:
+                min_matches: int = 15, progress: bool = True,
+                desc: str = "matching", position: int | None = None,
+                leave: bool = True) -> Iterator[PairMatch]:
     """Yield a PairMatch per pair clearing `min_matches`.
 
-    Matched coords come back in the matcher's RESIZED frame (vismatch stretches to a
-    square img_size x img_size), so we rescale per-axis back to original resolution.
+    The matcher resizes each image to a square `img_size`; we map the matched
+    coords back to original resolution with the matcher's own rescale_coords.
+    `desc`/`position`/`leave` let a caller nest this bar under a higher-level one.
     """
     it = pairs
     if progress:
         from tqdm import tqdm
-        it = tqdm(pairs, desc="matching", unit="pair")
+        it = tqdm(pairs, desc=desc, unit="pair", position=position, leave=leave)
 
     for name0, name1 in it:
         img0 = matcher.load_image(str(scene_root / name0), resize=img_size)
@@ -62,14 +66,15 @@ def match_pairs(matcher, scene_root: Path, pairs, img_size: int = 1024,
         result = matcher(img0, img1)
         mkpts0 = np.asarray(result["matched_kpts0"], dtype=np.float32)
         mkpts1 = np.asarray(result["matched_kpts1"], dtype=np.float32)
+        if mkpts0.shape[0] < min_matches:
+            continue
         (W0, H0), (W1, H1) = image_size(scene_root / name0), image_size(scene_root / name1)
         rH0, rW0 = tuple(img0.shape)[-2:]
         rH1, rW1 = tuple(img1.shape)[-2:]
-        mkpts0 *= np.array([W0 / rW0, H0 / rH0], dtype=np.float32)
-        mkpts1 *= np.array([W1 / rW1, H1 / rH1], dtype=np.float32)
-        if mkpts0.shape[0] < min_matches:
-            continue
+        mkpts0 = matcher.rescale_coords(mkpts0, H0, W0, rH0, rW0)
+        mkpts1 = matcher.rescale_coords(mkpts1, H1, W1, rH1, rW1)
         yield PairMatch(name0, name1, mkpts0, mkpts1)
+
 
 def visualize_pair(pm: PairMatch, scene_root: Path, out_path: Path, max_draw: int = 10_000):
     """Debug: draw matches on the ORIGINAL-resolution images. If points land on

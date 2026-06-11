@@ -1,7 +1,10 @@
-scene_root: /workspace/colmap_scenes/lg_science_park/hub_galaxy_test1
-
-submaps: [hub_left, hub_right]
-
-# overlapping submap pairs (undirected); these get bridged + merged
+scene_root: /workspace/colmap_scenes/lg_science_park/full_scene
+submaps: [lounge, hub_right, hub_left, hallway]
 overlaps:
-  - [hub_left, hub_right]
+  - [lounge, hub_right]
+  - [hub_right, hub_left]
+  - [hub_left, hallway]
+matcher:
+  name: superpoint-lightglue
+  img_size: 1024
+  device: cuda

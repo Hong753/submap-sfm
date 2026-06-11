@@ -1,34 +1,52 @@
 import os
+import shutil
+from pathlib import Path
+from collections import defaultdict
+
+import yaml
+from tqdm import tqdm
 
 from submap_sfm.scene import Scene
 from submap_sfm.pairs import list_images
 from submap_sfm.keyframes import select_keyframes
+from submap_sfm.matching import load_matcher, match_pairs, visualize_pair
 
 CONFIG = "configs/default.yaml"
-STRIDE = 20
-MIN_INLIERS = 100        # "significant overlap"; well above COLMAP's ~30 PnP floor
+STRIDE = 50
+MIN_MATCHES = 100        # "significant overlap" — LightGlue match count
 # ---------------------------------------------------------------------------
 
 scene = Scene.load(CONFIG)
+with open(CONFIG) as f:
+    M = yaml.safe_load(f).get("matcher", {})
+MATCHER = M.get("name", "superpoint-lightglue")
+IMG_SIZE = M.get("img_size", 1024)
+DEVICE = M.get("device", "cuda")
+
 images_root = os.path.join(scene.root, "images")
 images = {
     s: list_images(os.path.join(images_root, s), root=images_root)
     for s in scene.submaps
 }
 
+matcher = load_matcher(MATCHER, device=DEVICE, img_size=IMG_SIZE)
 
-def score(pairs):
-    """Verified inlier count for each cross pair.
+best_match = {}          # frame name -> (count, PairMatch), scoped to current overlap
+_overlap = ""            # current overlap label, set per loop iteration
 
-    in:  [(name_a, name_b), ...]   names relative to {scene.root}/images
-    out: {(name_a, name_b): num_verified_inliers}
 
-    WIRE THIS TO matching.py. Either call a matching.py function that matches a
-    pair list and hand back its verified match counts, or write `pairs` to a
-    scratch pairs file, run your normal match+verify into a scratch database.db,
-    and read the two-view inlier counts back out.
-    """
-    raise NotImplementedError("connect to matching.py")
+def score(pairs, stride):
+    """Match count per (name_a, name_b); also remember each frame's best pair."""
+    counts = {}
+    desc = f"  {_overlap} s={stride}"
+    for pm in match_pairs(matcher, Path(images_root), pairs, img_size=IMG_SIZE,
+                          min_matches=0, desc=desc, position=1, leave=False):
+        n = pm.mkpts0.shape[0]
+        counts[(pm.name0, pm.name1)] = n
+        for name in (pm.name0, pm.name1):
+            if n > best_match.get(name, (0, None))[0]:
+                best_match[name] = (n, pm)
+    return counts
 
 
 def write_keyframes(names, unit):
@@ -38,11 +56,38 @@ def write_keyframes(names, unit):
         f.write("\n".join(names) + ("\n" if names else ""))
 
 
-for a, b in {tuple(sorted(o)) for o in scene.overlaps}:
+def visualize_keyframes(names, unit):
+    """Draw each keyframe's strongest match (this overlap) as it's done."""
+    out = Path(scene.root) / "units" / unit / "debug" / "keyframes"
+    out.mkdir(parents=True, exist_ok=True)
+    for name in tqdm(names, desc=f"viz {unit}", unit="kf", position=1, leave=False):
+        _, pm = best_match.get(name, (0, None))
+        if pm is not None:
+            visualize_pair(pm, Path(images_root), out / f"{name.replace('/', '_')}.png")
+
+
+# clear previous overlays once up front (we append per overlap below)
+for s in scene.submaps:
+    shutil.rmtree(Path(scene.root) / "units" / f"{s}_aug" / "debug" / "keyframes",
+                  ignore_errors=True)
+
+# accumulate keyframes across overlaps; visualize each overlap's matches as it finishes
+collected = defaultdict(set)
+overlaps = sorted({tuple(sorted(o)) for o in scene.overlaps})
+bar = tqdm(overlaps, unit="overlap", position=0)
+for a, b in bar:
+    bar.set_description(f"{a}<->{b}")
+    _overlap = f"{a}<->{b}"
+    best_match.clear()
     a_ov, b_ov = select_keyframes(
-        images[a], images[b], score, stride=STRIDE, min_inliers=MIN_INLIERS
+        images[a], images[b], score, stride=STRIDE, min_inliers=MIN_MATCHES
     )
-    # a-frames see b -> keyframes for b's aug unit; b-frames see a -> a's aug unit
-    write_keyframes(b_ov, f"{a}_aug")
-    write_keyframes(a_ov, f"{b}_aug")
-    print(f"{a} <-> {b}: {len(a_ov)} from {a}, {len(b_ov)} from {b}")
+    collected[f"{a}_aug"].update(b_ov)
+    collected[f"{b}_aug"].update(a_ov)
+    visualize_keyframes(b_ov, f"{a}_aug")
+    visualize_keyframes(a_ov, f"{b}_aug")
+    tqdm.write(f"{a} <-> {b}: {len(a_ov)} from {a}, {len(b_ov)} from {b}")
+
+for unit, names in collected.items():
+    write_keyframes(sorted(names), unit)
+    tqdm.write(f"{unit}: {len(names)} keyframes -> units/{unit}/debug/keyframes/")
