@@ -12,8 +12,8 @@ from submap_sfm.keyframes import select_keyframes
 from submap_sfm.matching import load_matcher, match_pairs, visualize_pair
 
 CONFIG = "configs/default.yaml"
-STRIDE = 50
-MIN_MATCHES = 100        # "significant overlap" — LightGlue match count
+STRIDE = 20
+MIN_MATCHES = 200        # "significant overlap" — LightGlue match count
 # ---------------------------------------------------------------------------
 
 scene = Scene.load(CONFIG)
@@ -36,16 +36,22 @@ _overlap = ""            # current overlap label, set per loop iteration
 
 
 def score(pairs, stride):
-    """Match count per (name_a, name_b); also remember each frame's best pair."""
+    """Match count per (name_a, name_b); also remember each frame's best pair.
+
+    Owns its own bar so it can show a live keyframe count (frames seen so far at
+    >= MIN_MATCHES) in the postfix, which keeps moving during the long fine pass.
+    """
     counts = {}
-    desc = f"  {_overlap} s={stride}"
-    for pm in match_pairs(matcher, Path(images_root), pairs, img_size=IMG_SIZE,
-                          min_matches=0, desc=desc, position=1, leave=False):
+    pbar = tqdm(pairs, desc=f"  {_overlap} s={stride}", unit="pair",
+                position=1, leave=False)
+    for pm in match_pairs(matcher, Path(images_root), pbar, img_size=IMG_SIZE,
+                          min_matches=0, progress=False):
         n = pm.mkpts0.shape[0]
         counts[(pm.name0, pm.name1)] = n
         for name in (pm.name0, pm.name1):
             if n > best_match.get(name, (0, None))[0]:
                 best_match[name] = (n, pm)
+        pbar.set_postfix(kf=sum(1 for c, _ in best_match.values() if c >= MIN_MATCHES))
     return counts
 
 

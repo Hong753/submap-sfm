@@ -7,8 +7,8 @@ contiguous bumps where the trajectories overlap. So we sample coarse-to-fine:
   * Repeatedly halve the stride and re-test only the neighbourhoods of cells that
     matched, so off-band regions are only ever probed coarsely while the overlap
     bumps get refined down to full resolution.
-  * Every frame in a pair over `min_inliers` is a keyframe (no fixed count).
-    Separate overlap segments are followed independently from their own hits.
+  * Every frame in a pair over `min_inliers` is a keyframe (no fixed count);
+    prune keyframes.txt by hand afterwards if a band gives more than you need.
 
 `score(pairs, stride)`: match the pairs, return {(name_a, name_b): match_count}.
 `stride` is the current grid level, passed only so the caller can label progress.
