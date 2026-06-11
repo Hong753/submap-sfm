@@ -34,20 +34,22 @@ pip install -e . --no-build-isolation
 submap-sfm/
 ├── submap_sfm/
 │   ├── __init__.py
-│   ├── scene.py           # scene graph: submaps + overlaps
-│   ├── pairs.py           # intra + inter pair generation
-│   ├── matching.py        # run a vismatch matcher over the pair list
-│   ├── colmap_db.py       # write keypoints/matches into a COLMAP database
-│   ├── reconstruct.py     # pycolmap incremental mapping per unit
-│   └── merge.py           # model_merger + global BA
+│   ├── scene.py            # scene graph: submaps + overlaps
+│   ├── pairs.py            # intra + inter pair generation
+│   ├── keyframes.py        # automatic keyframe selection (overlap discovery)
+│   ├── matching.py         # run a vismatch matcher over the pair list
+│   ├── colmap_db.py        # write keypoints/matches into a COLMAP database
+│   ├── reconstruct.py      # pycolmap incremental mapping per unit
+│   └── merge.py            # model_merger + global BA
 ├── scripts/
+│   ├── select_keyframes.py # discover overlaps -> keyframes.txt per aug unit
 │   ├── build_pairs.py
-│   ├── run_matching.py    # match a unit -> build + verify its database.db
-│   ├── run_reconstruct.py # incremental mapping -> sparse/ for a unit
+│   ├── run_matching.py     # match a unit -> build + verify its database.db
+│   ├── run_reconstruct.py  # incremental mapping -> sparse/ for a unit
 │   └── run_merge.py
 ├── configs/
-│   └── default.yaml       # scene definition
-├── third_party/           # vismatch submodule
+│   └── default.yaml        # scene definition
+├── third_party/            # vismatch submodule
 ├── pyproject.toml
 └── README.md
 ```
@@ -66,16 +68,49 @@ overlaps:
   - [hub_left, hallway]
 ```
 
-## Keyframes (manual selection)
+## Keyframes
 
-Keyframes are the bridge frames tying two overlapping submaps together: a handful
-of frames from one submap that view the region it shares with the other. They
-anchor the Sim(3) alignment at merge time, so each one must register in *both*
-submaps.
+Keyframes are the bridge frames tying two overlapping submaps together: frames
+from one submap that view the region it shares with the other. They create the
+cross-submap connections, so each one must register in *both* submaps. Pick them
+manually or discover them automatically — either way the result is one
+`keyframes.txt` per augmented unit under `units/`, one image name per line,
+relative to `{SCENE_ROOT}/images` (e.g. `hub_right/000742.jpg`).
 
-Author one `keyframes.txt` per augmented submap by hand — one image name per
-line, relative to `{SCENE_ROOT}/images`. A submap with more than one neighbor in
-the overlap chain collects keyframes from each of them:
+### Automatic selection (overlap discovery)
+
+`scripts/select_keyframes.py` finds the overlapping frames for every pair in
+`overlaps` without brute-forcing the full A×B grid. Because each submap is a
+continuous trajectory:
+
+1. **Coarse pass** — subsample both trajectories every `STRIDE` frames and match
+   that small grid. Overlap shows up as pairs whose verified inlier count clears
+   `MIN_INLIERS`.
+2. **Densify** — an overlap is a contiguous run, so the only other overlapping
+   frames are the ones skipped *around* the coarse hits. The ±`STRIDE`
+   neighbourhood of every hit is re-matched; adjacent hits' neighbourhoods
+   overlap, so each contiguous segment is recovered in full, and multiple
+   separate overlap segments are found independently.
+3. **Collect** — every frame appearing in a pair over `MIN_INLIERS` becomes a
+   keyframe. No fixed count: the threshold decides, so denser overlap yields
+   more keyframes.
+
+The foreign frames of each overlap go into the matching aug unit (B-frames
+overlapping A → `A_aug/keyframes.txt`, and vice versa). Scoring reuses the same
+matcher backend as `run_matching`.
+
+```
+python scripts/select_keyframes.py
+```
+
+Tunables at the top of the script: `STRIDE` (coarse subsample; keep it ≤ the
+shortest overlap you can't afford to miss) and `MIN_INLIERS` (the "significant
+overlap" bar, set well above COLMAP's ~30 PnP floor).
+
+### Manual selection
+
+Author each `keyframes.txt` by hand instead. A submap with more than one neighbor
+in the overlap chain collects keyframes from each of them:
 
 ```
 {SCENE_ROOT}/units/lounge_aug/keyframes.txt      # hub_right frames overlapping lounge
@@ -140,8 +175,9 @@ which keeps names unique across submaps. After matching, each unit also holds
 ## Usage
 
 ```
-# 1. Author keyframes manually: create keyframes.txt in each augmented unit
-#    under units/ (see "Keyframes" above).
+# 1. Select keyframes — automatically:
+python scripts/select_keyframes.py
+#    ...or author keyframes.txt by hand (see "Keyframes" above).
 
 # 2. Build pair lists for each unit (prints intra / inter / total counts)
 python scripts/build_pairs.py

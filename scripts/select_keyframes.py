@@ -1,59 +1,48 @@
 import os
-from collections import defaultdict
-import pycolmap
+
 from submap_sfm.scene import Scene
+from submap_sfm.pairs import list_images
+from submap_sfm.keyframes import select_keyframes
 
 CONFIG = "configs/default.yaml"
-N_KF = 20                 # keyframes per augmented submap (top-scoring)
-MIN_INLIERS = 100         # ignore weak cross geometries
-MAX_PID = 2147483647      # COLMAP pair_id base: pid = id1*MAX_PID + id2
+STRIDE = 20
+MIN_INLIERS = 100        # "significant overlap"; well above COLMAP's ~30 PnP floor
 # ---------------------------------------------------------------------------
 
 scene = Scene.load(CONFIG)
+images_root = os.path.join(scene.root, "images")
+images = {
+    s: list_images(os.path.join(images_root, s), root=images_root)
+    for s in scene.submaps
+}
 
 
-def edge_name(a: str, b: str) -> str:
-    a, b = sorted((a, b))
-    return f"{a}__{b}".replace("/", "-")
+def score(pairs):
+    """Verified inlier count for each cross pair.
+
+    in:  [(name_a, name_b), ...]   names relative to {scene.root}/images
+    out: {(name_a, name_b): num_verified_inliers}
+
+    WIRE THIS TO matching.py. Either call a matching.py function that matches a
+    pair list and hand back its verified match counts, or write `pairs` to a
+    scratch pairs file, run your normal match+verify into a scratch database.db,
+    and read the two-view inlier counts back out.
+    """
+    raise NotImplementedError("connect to matching.py")
 
 
-def submap_of(name: str):
-    for s in scene.submaps:
-        if name.startswith(s + "/"):
-            return s
-    return None
+def write_keyframes(names, unit):
+    path = os.path.join(scene.root, "units", unit, "keyframes.txt")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write("\n".join(names) + ("\n" if names else ""))
 
 
-# scores[s_aug][neighbour_frame] = total verified cross-inliers bridging to s
-scores = defaultdict(lambda: defaultdict(int))
-
-for a, b in {tuple(sorted(e)) for e in scene.overlaps}:
-    db_path = os.path.join(scene.root, "edges", edge_name(a, b), "database.db")
-    db = pycolmap.Database.open(db_path)
-    id_to_name = {im.image_id: im.name for im in db.read_all_images()}
-    pair_ids, counts = db.read_two_view_geometry_num_inliers()
-    db.close()
-
-    for pid, n in zip(pair_ids, counts):
-        if n < MIN_INLIERS:
-            continue
-        n1 = id_to_name.get(pid // MAX_PID)
-        n2 = id_to_name.get(pid % MAX_PID)
-        if n1 is None or n2 is None:
-            continue
-        s1, s2 = submap_of(n1), submap_of(n2)
-        if s1 is None or s2 is None or s1 == s2:
-            continue
-        # frame from s2 bridges to s1 -> candidate keyframe for s1_aug, and vice versa
-        scores[f"{s1}_aug"][n2] += n
-        scores[f"{s2}_aug"][n1] += n
-
-for aug, frame_scores in scores.items():
-    ranked = sorted(frame_scores, key=frame_scores.get, reverse=True)[:N_KF]
-    keyframes = sorted(ranked)
-    os.makedirs(os.path.join(scene.root, aug), exist_ok=True)
-    out = os.path.join(scene.root, aug, "keyframes.txt")
-    with open(out, "w") as f:
-        f.write("\n".join(keyframes) + "\n")
-    top = [frame_scores[k] for k in ranked[:3]]
-    print(f"{aug:14s} {len(keyframes)} keyframes  (top inlier scores: {top})")
+for a, b in {tuple(sorted(o)) for o in scene.overlaps}:
+    a_ov, b_ov = select_keyframes(
+        images[a], images[b], score, stride=STRIDE, min_inliers=MIN_INLIERS
+    )
+    # a-frames see b -> keyframes for b's aug unit; b-frames see a -> a's aug unit
+    write_keyframes(b_ov, f"{a}_aug")
+    write_keyframes(a_ov, f"{b}_aug")
+    print(f"{a} <-> {b}: {len(a_ov)} from {a}, {len(b_ov)} from {b}")
