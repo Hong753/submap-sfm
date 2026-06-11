@@ -28,8 +28,8 @@ def select_keyframes(
     names_a: list[str],
     names_b: list[str],
     score: ScoreFn,
-    stride: int = 50,
-    min_inliers: int = 100,
+    stride: int = 20,
+    min_inliers: int = 200,
     explore: int | None = None,
 ) -> tuple[list[str], list[str]]:
     """Return (a_overlap, b_overlap): frames of each submap that overlap the other.
