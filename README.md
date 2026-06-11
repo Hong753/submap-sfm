@@ -58,13 +58,12 @@ submap-sfm/
 them overlap (so they get bridged + merged):
 
 ```yaml
-scene_root: /data/colmap_scenes/lg_science_park/hub_galaxy_test1
-submaps: [hub_left, hub_right, lounge, hallway]
+scene_root: /workspace/colmap_scenes/lg_science_park/full_scene
+submaps: [lounge, hub_right, hub_left, hallway]
 overlaps:
-  - [hub_left, hub_right]
-  # one line per pair of submaps that share views, e.g.:
-  # - [hub_right, lounge]
-  # - [lounge, hallway]
+  - [lounge, hub_right]
+  - [hub_right, hub_left]
+  - [hub_left, hallway]
 ```
 
 ## Keyframes (manual selection)
@@ -75,17 +74,20 @@ anchor the Sim(3) alignment at merge time, so each one must register in *both*
 submaps.
 
 Author one `keyframes.txt` per augmented submap by hand — one image name per
-line, relative to `{SCENE_ROOT}/images`:
+line, relative to `{SCENE_ROOT}/images`. A submap with more than one neighbor in
+the overlap chain collects keyframes from each of them:
 
 ```
-{SCENE_ROOT}/units/hub_left_aug/keyframes.txt    # hub_right frames overlapping hub_left
-{SCENE_ROOT}/units/hub_right_aug/keyframes.txt   # hub_left  frames overlapping hub_right
+{SCENE_ROOT}/units/lounge_aug/keyframes.txt      # hub_right frames overlapping lounge
+{SCENE_ROOT}/units/hub_right_aug/keyframes.txt   # lounge + hub_left frames overlapping hub_right
+{SCENE_ROOT}/units/hub_left_aug/keyframes.txt    # hub_right + hallway frames overlapping hub_left
+{SCENE_ROOT}/units/hallway_aug/keyframes.txt     # hub_left frames overlapping hallway
 ```
 
 Example line: `hub_right/000742.jpg`
 
 Selection guidelines:
-- ~20 per submap, all drawn from the overlap region.
+- ~20 per overlap, all drawn from the shared region.
 - Spread them across the overlap (not clustered or near-collinear) so scale and
   rotation are well constrained for the merge.
 - Avoid mirrors, glass, and blank/textureless walls — prefer stable, textured,
@@ -110,18 +112,22 @@ Inputs live under `images/`, all derived artifacts under `units/`:
 ```
 {SCENE_ROOT}/
 ├── images/                         # source frames, one folder per submap
-│   ├── hub_left/000000.jpg ...
-│   ├── hub_right/000000.jpg ...
 │   ├── lounge/000000.jpg ...
+│   ├── hub_right/000000.jpg ...
+│   ├── hub_left/000000.jpg ...
 │   └── hallway/000000.jpg ...
 └── units/                          # derived artifacts, one folder per reconstruction unit
-    ├── hub_left_aug/
-    │   ├── keyframes.txt           # manual bridge frames (from hub_right)
+    ├── lounge_aug/
+    │   ├── keyframes.txt           # bridge frames from hub_right
     │   ├── pairs_intra.txt         # within-submap pairs
     │   ├── pairs_inter.txt         # keyframe -> local pairs
     │   └── pairs.txt               # combined (for matching)
     ├── hub_right_aug/
-    │   └── ...                     # same files (keyframes from hub_left)
+    │   └── ...                     # keyframes from lounge + hub_left
+    ├── hub_left_aug/
+    │   └── ...                     # keyframes from hub_right + hallway
+    ├── hallway_aug/
+    │   └── ...                     # keyframes from hub_left
     └── full_scene/
         └── pairs.txt
 ```
@@ -146,12 +152,14 @@ python scripts/build_pairs.py
 Match each unit on its combined `pairs.txt`. This builds and verifies
 `units/{unit}/database.db` and saves overlays to `units/{unit}/debug/pairs/`.
 `--viz-every N` saves every Nth matched pair, so set `N ≈ total_pairs / 500`
-(totals from step 2) for ~500 overlays per unit:
+(totals from step 2) for ~500 overlays per unit. Run it for each aug unit plus
+`full_scene`:
 
 ```
-python scripts/run_matching.py --unit hub_left_aug  --pairs pairs.txt --viz-every 50
 python scripts/run_matching.py --unit hub_right_aug --pairs pairs.txt --viz-every 50
+python scripts/run_matching.py --unit hub_left_aug  --pairs pairs.txt --viz-every 50
 python scripts/run_matching.py --unit full_scene    --pairs pairs.txt --viz-every 100
+# ...likewise for lounge_aug and hallway_aug
 ```
 
 Defaults: `--matcher superpoint-lightglue --img-size 1024 --device cuda
