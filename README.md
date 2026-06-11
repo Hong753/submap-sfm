@@ -34,51 +34,55 @@ pip install -e . --no-build-isolation
 submap-sfm/
 ├── submap_sfm/
 │   ├── __init__.py
-│   ├── scene.py          # scene graph: submaps + overlaps
-│   ├── pairs.py          # intra + inter pair generation
-│   ├── matching.py       # run a vismatch matcher over the pair list
-│   ├── colmap_db.py      # write keypoints/matches into a COLMAP database
-│   ├── reconstruct.py    # pycolmap incremental mapping per submap
-│   └── merge.py          # model_merger + global BA
+│   ├── scene.py           # scene graph: submaps + overlaps
+│   ├── pairs.py           # intra + inter pair generation
+│   ├── matching.py        # run a vismatch matcher over the pair list
+│   ├── colmap_db.py       # write keypoints/matches into a COLMAP database
+│   ├── reconstruct.py     # pycolmap incremental mapping per unit
+│   └── merge.py           # model_merger + global BA
 ├── scripts/
 │   ├── build_pairs.py
-│   ├── run_matching.py   # match a unit -> build + verify its database.db
-│   ├── run_submap.py
+│   ├── run_matching.py    # match a unit -> build + verify its database.db
+│   ├── run_reconstruct.py # incremental mapping -> sparse/ for a unit
 │   └── run_merge.py
 ├── configs/
-│   └── default.yaml      # scene definition
-├── third_party/          # vismatch submodule
+│   └── default.yaml       # scene definition
+├── third_party/           # vismatch submodule
 ├── pyproject.toml
 └── README.md
 ```
 
 ## Config
 
-`configs/default.yaml` defines the scene graph — the nodes (submaps) and which
-ones overlap (so they get bridged + merged):
+`configs/default.yaml` defines the scene graph — the submaps and which pairs of
+them overlap (so they get bridged + merged):
 
 ```yaml
 scene_root: /data/colmap_scenes/lg_science_park/hub_galaxy_test1
-submaps: [hub_left, hub_right]
+submaps: [hub_left, hub_right, lounge, hallway]
 overlaps:
   - [hub_left, hub_right]
+  # one line per pair of submaps that share views, e.g.:
+  # - [hub_right, lounge]
+  # - [lounge, hallway]
 ```
 
 ## Keyframes (manual selection)
 
-Keyframes are the bridge frames tying two submaps together: a handful of frames
-from one submap that view the region it shares with the other. They anchor the
-Sim(3) alignment at merge time, so each one must register in *both* submaps.
+Keyframes are the bridge frames tying two overlapping submaps together: a handful
+of frames from one submap that view the region it shares with the other. They
+anchor the Sim(3) alignment at merge time, so each one must register in *both*
+submaps.
 
 Author one `keyframes.txt` per augmented submap by hand — one image name per
-line, relative to `SCENE_ROOT`:
+line, relative to `{SCENE_ROOT}/images`:
 
 ```
-{SCENE_ROOT}/hub_left_aug/keyframes.txt    # hub_right frames overlapping hub_left
-{SCENE_ROOT}/hub_right_aug/keyframes.txt   # hub_left  frames overlapping hub_right
+{SCENE_ROOT}/units/hub_left_aug/keyframes.txt    # hub_right frames overlapping hub_left
+{SCENE_ROOT}/units/hub_right_aug/keyframes.txt   # hub_left  frames overlapping hub_right
 ```
 
-Example line: `hub_right/images/00742.jpg`
+Example line: `hub_right/000742.jpg`
 
 Selection guidelines:
 - ~20 per submap, all drawn from the overlap region.
@@ -92,29 +96,46 @@ Selection guidelines:
 
 ## Data layout (SCENE_ROOT)
 
+Source frames are extracted from one video per submap at 1 fps (initial repeated
+frames removed by hand):
+
 ```
-{SCENE_ROOT}/
-├── hub_left/images/00000.jpg ...      # source images
-├── hub_right/images/00000.jpg ...     # source images
-├── hub_left_aug/
-│   ├── keyframes.txt                  # manual bridge frames (from hub_right)
-│   ├── pairs_intra.txt                # within-node pairs
-│   ├── pairs_inter.txt                # node-to-edge pairs (keyframe -> local)
-│   └── pairs.txt                      # combined (for matching)
-├── hub_right_aug/
-│   └── ...                            # same files (keyframes from hub_left)
-└── full_scene/
-    └── pairs.txt
+ffmpeg -y -hwaccel auto -i hallway_20260513_075535.mp4 \
+  -vf fps=1 -q:v 2 -start_number 0 \
+  images/hallway/%06d.jpg
 ```
 
-After matching, each unit also holds `database.db`, `debug/pairs/` (match
-overlays), and later `sparse/`.
+Inputs live under `images/`, all derived artifacts under `units/`:
+
+```
+{SCENE_ROOT}/
+├── images/                         # source frames, one folder per submap
+│   ├── hub_left/000000.jpg ...
+│   ├── hub_right/000000.jpg ...
+│   ├── lounge/000000.jpg ...
+│   └── hallway/000000.jpg ...
+└── units/                          # derived artifacts, one folder per reconstruction unit
+    ├── hub_left_aug/
+    │   ├── keyframes.txt           # manual bridge frames (from hub_right)
+    │   ├── pairs_intra.txt         # within-submap pairs
+    │   ├── pairs_inter.txt         # keyframe -> local pairs
+    │   └── pairs.txt               # combined (for matching)
+    ├── hub_right_aug/
+    │   └── ...                     # same files (keyframes from hub_left)
+    └── full_scene/
+        └── pairs.txt
+```
+
+The COLMAP image root is `{SCENE_ROOT}/images`, so every image name — in the pair
+lists, keyframes, and the database — is relative to it (e.g. `hub_left/000000.jpg`),
+which keeps names unique across submaps. After matching, each unit also holds
+`database.db` and `debug/pairs/` (match overlays); after reconstruction, `sparse/`.
 
 ## Usage
 
 ```
-# 1. Author keyframes manually: create keyframes.txt in each augmented submap
-#    directory (see "Keyframes" above).
+# 1. Author keyframes manually: create keyframes.txt in each augmented unit
+#    under units/ (see "Keyframes" above).
 
 # 2. Build pair lists for each unit (prints intra / inter / total counts)
 python scripts/build_pairs.py
@@ -123,9 +144,9 @@ python scripts/build_pairs.py
 ### Matching
 
 Match each unit on its combined `pairs.txt`. This builds and verifies
-`{unit}/database.db` and saves overlays to `{unit}/debug/pairs/`. `--viz-every N`
-saves every Nth matched pair, so set `N ≈ total_pairs / 500` (totals from step 2)
-for ~500 overlays per unit:
+`units/{unit}/database.db` and saves overlays to `units/{unit}/debug/pairs/`.
+`--viz-every N` saves every Nth matched pair, so set `N ≈ total_pairs / 500`
+(totals from step 2) for ~500 overlays per unit:
 
 ```
 python scripts/run_matching.py --unit hub_left_aug  --pairs pairs.txt --viz-every 50
@@ -136,3 +157,16 @@ python scripts/run_matching.py --unit full_scene    --pairs pairs.txt --viz-ever
 Defaults: `--matcher superpoint-lightglue --img-size 1024 --device cuda
 --min-matches 15`. Add `--debug` for per-pair match counts, or `--limit N` to
 match only the first N pairs as a quick check.
+
+### Reconstruction
+
+Run incremental mapping on a verified unit. Models are written to
+`units/{unit}/sparse/0`, `/1`, … (multiple models if COLMAP fragments); the
+largest is the one to use:
+
+```
+python scripts/run_reconstruct.py --unit full_scene
+```
+
+Use `--min-model-size 3` while debugging a hard scene so small fragments survive
+instead of being discarded.
