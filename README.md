@@ -43,6 +43,7 @@ submap-sfm/
 │   └── merge.py            # model_merger + global BA
 ├── scripts/
 │   ├── select_keyframes.py # discover overlaps -> keyframes.txt per aug unit
+│   ├── review_keyframes.py # interactively keep/remove keyframes, per overlap
 │   ├── build_pairs.py
 │   ├── run_matching.py     # match a unit -> build + verify its database.db
 │   ├── run_reconstruct.py  # incremental mapping -> sparse/ for a unit
@@ -72,40 +73,66 @@ overlaps:
 
 Keyframes are the bridge frames tying two overlapping submaps together: frames
 from one submap that view the region it shares with the other. They create the
-cross-submap connections, so each one must register in *both* submaps. Pick them
-manually or discover them automatically — either way the result is one
-`keyframes.txt` per augmented unit under `units/`, one image name per line,
-relative to `{SCENE_ROOT}/images` (e.g. `hub_right/000742.jpg`).
+cross-submap connections, so each one must register in *both* submaps. Discover
+them automatically and prune by eye, or author them by hand. Either way the
+result is one `keyframes.txt` per augmented unit under `units/`, one image name
+per line, relative to `{SCENE_ROOT}/images` (e.g. `hub_right/000742.jpg`).
 
 ### Automatic selection (overlap discovery)
 
 `scripts/select_keyframes.py` finds the overlapping frames for every pair in
-`overlaps` without brute-forcing the full A×B grid. Because each submap is a
-continuous trajectory:
+`overlaps` without brute-forcing the full A×B grid. The grid of match counts is a
+smooth field — near-zero almost everywhere, with contiguous bumps where the
+trajectories overlap — so it's sampled coarse-to-fine:
 
-1. **Coarse pass** — subsample both trajectories every `STRIDE` frames and match
-   that small grid. Overlap shows up as pairs whose verified inlier count clears
-   `MIN_INLIERS`.
-2. **Densify** — an overlap is a contiguous run, so the only other overlapping
-   frames are the ones skipped *around* the coarse hits. The ±`STRIDE`
-   neighbourhood of every hit is re-matched; adjacent hits' neighbourhoods
-   overlap, so each contiguous segment is recovered in full, and multiple
-   separate overlap segments are found independently.
-3. **Collect** — every frame appearing in a pair over `MIN_INLIERS` becomes a
-   keyframe. No fixed count: the threshold decides, so denser overlap yields
-   more keyframes.
+1. **Coarse pass** — subsample both trajectories every `MAX_STRIDE` frames and
+   match that small grid. Overlap shows up as pairs whose LightGlue match count
+   clears `MIN_MATCHES`.
+2. **Refine** — repeatedly halve the stride *down to `MIN_STRIDE`* (not to 1),
+   re-matching only the neighbourhoods of cells already above a looser `explore`
+   bar (half of `MIN_MATCHES`). Off-band regions stay coarsely probed; the
+   overlap bumps get refined to `MIN_STRIDE` spacing.
+3. **Collect** — every frame in a pair over `MIN_MATCHES` becomes a keyframe.
+   Stopping at `MIN_STRIDE` caps density, so keyframes land ~`MIN_STRIDE` frames
+   apart (≈ `band_length / MIN_STRIDE` per side) instead of one-per-frame
+   near-duplicates.
 
-The foreign frames of each overlap go into the matching aug unit (B-frames
-overlapping A → `A_aug/keyframes.txt`, and vice versa). Scoring reuses the same
-matcher backend as `run_matching`.
+Foreign frames go into the matching aug unit (B-frames overlapping A →
+`A_aug/keyframes.txt`, and vice versa), accumulated across both neighbours for a
+middle submap. Each pick is drawn as a match overlay in
+`units/{unit}/debug/keyframes/` for review. Scoring reuses the same matcher
+backend as `run_matching`.
 
 ```
 python scripts/select_keyframes.py
 ```
 
-Tunables at the top of the script: `STRIDE` (coarse subsample; keep it ≤ the
-shortest overlap you can't afford to miss) and `MIN_INLIERS` (the "significant
-overlap" bar, set well above COLMAP's ~30 PnP floor).
+Tunables at the top of the script: `MAX_STRIDE` (coarse grid; keep it ≤ the
+shortest overlap you can't afford to miss), `MIN_STRIDE` (finest level / keyframe
+spacing — raise to thin further, `1` resolves every frame), and `MIN_MATCHES`
+(the "significant overlap" bar).
+
+> Match count alone can't reject mirror reflections or repeated structure — they
+> score as high as real overlap. Selection is a generous proposal; cull the false
+> positives in review (below), and the final gate is whether each keyframe
+> registers during reconstruction.
+
+### Review (prune false positives)
+
+`scripts/review_keyframes.py` steps through the overlays interactively, one
+overlap at a time, so you can keep/remove each keyframe by eye. Nothing is
+written until you confirm, so you can toggle freely.
+
+```
+python scripts/review_keyframes.py                      # list overlaps + counts
+python scripts/review_keyframes.py --overlap hub_left hub_right
+```
+
+Keys: `←/→` navigate, `k` keep, `r` remove, `space` toggle, `q` finish (asks to
+confirm — `y` applies and quits, anything else cancels). On confirm it strips the
+removed frames from each `keyframes.txt` and deletes their overlay PNGs; other
+overlaps' frames in a shared unit are left untouched. Needs an interactive
+matplotlib backend (a display, Qt or Tk).
 
 ### Manual selection
 
@@ -123,13 +150,11 @@ Example line: `hub_right/000742.jpg`
 
 Selection guidelines:
 - ~20 per overlap, all drawn from the shared region.
-- Spread them across the overlap (not clustered or near-collinear) so scale and
-  rotation are well constrained for the merge.
+- Spread them across the overlap (not clustered or near-collinear).
 - Avoid mirrors, glass, and blank/textureless walls — prefer stable, textured,
   static geometry.
-- After matching, confirm each keyframe actually registers in both submaps with
-  a healthy inlier count, and replace any that don't (visually overlapping is
-  not the same as matchable).
+- After matching, confirm each keyframe registers in both submaps with a healthy
+  inlier count, and replace any that don't.
 
 ## Data layout (SCENE_ROOT)
 
@@ -179,7 +204,11 @@ which keeps names unique across submaps. After matching, each unit also holds
 python scripts/select_keyframes.py
 #    ...or author keyframes.txt by hand (see "Keyframes" above).
 
-# 2. Build pair lists for each unit (prints intra / inter / total counts)
+# 2. Review and prune the auto-selected keyframes, one overlap at a time:
+python scripts/review_keyframes.py                      # lists overlaps
+python scripts/review_keyframes.py --overlap hub_left hub_right
+
+# 3. Build pair lists for each unit (prints intra / inter / total counts)
 python scripts/build_pairs.py
 ```
 
