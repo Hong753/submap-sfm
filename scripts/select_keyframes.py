@@ -12,7 +12,8 @@ from submap_sfm.keyframes import select_keyframes
 from submap_sfm.matching import load_matcher, match_pairs, visualize_pair
 
 CONFIG = "configs/default.yaml"
-STRIDE = 20
+MAX_STRIDE = 20          # initial coarse grid; ~ smallest detectable overlap
+MIN_STRIDE = 5           # finest level; keyframe spacing ~ this (raise to thin further)
 MIN_MATCHES = 200        # "significant overlap" — LightGlue match count
 # ---------------------------------------------------------------------------
 
@@ -86,7 +87,8 @@ for a, b in bar:
     _overlap = f"{a}<->{b}"
     best_match.clear()
     a_ov, b_ov = select_keyframes(
-        images[a], images[b], score, stride=STRIDE, min_inliers=MIN_MATCHES
+        images[a], images[b], score,
+        max_stride=MAX_STRIDE, min_stride=MIN_STRIDE, min_inliers=MIN_MATCHES,
     )
     collected[f"{a}_aug"].update(b_ov)
     collected[f"{b}_aug"].update(a_ov)
