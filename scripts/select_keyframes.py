@@ -12,8 +12,8 @@ from submap_sfm.keyframes import select_keyframes
 from submap_sfm.matching import load_matcher, match_pairs, visualize_pair
 
 CONFIG = "configs/default.yaml"
-MAX_STRIDE = 20          # initial coarse grid; ~ smallest detectable overlap
-MIN_STRIDE = 5           # finest level; keyframe spacing ~ this (raise to thin further)
+MAX_STRIDE = 8           # initial coarse grid; ~ smallest detectable overlap
+MIN_STRIDE = 2           # finest level; keyframe spacing ~ this (raise to thin further)
 MIN_MATCHES = 200        # "significant overlap" — LightGlue match count
 # ---------------------------------------------------------------------------
 
