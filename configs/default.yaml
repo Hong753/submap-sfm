@@ -1,9 +1,11 @@
 scene_root: /workspace/colmap_scenes/lg_science_park/full_scene_20260523
 submaps: [lounge, hub_right, hub_left]
-overlaps:
-  - [lounge, hub_right]
-  - [hub_right, hub_left]
+
 matcher:
   name: superpoint-lightglue
   img_size: 1024
   device: cuda
+
+overlaps:
+  - [lounge, hub_right]
+  - [hub_right, hub_left]
