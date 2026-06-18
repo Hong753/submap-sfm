@@ -1,4 +1,4 @@
-scene_root: /workspace/colmap_scenes/lg_science_park/full_scene_20260523
+scene_root: /workspace/colmap_scenes/lg_science_park/full_scene
 submaps: [lounge, hub_right, hub_left]
 
 matcher:
