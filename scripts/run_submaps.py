@@ -44,7 +44,7 @@ def main():
     ap.add_argument("--config", default="configs/default.yaml")
     ap.add_argument("--submaps", nargs="+", default=None,
                     help="subset to run (default: all submaps in the config)")
-    ap.add_argument("--window", type=int, default=20,
+    ap.add_argument("--window", type=int, default=10,
                     help="sequential intra window for node_pairs; default 10")
     ap.add_argument("--matcher", default=None, help="override config matcher name")
     ap.add_argument("--img-size", type=int, default=None, help="override config img_size")
